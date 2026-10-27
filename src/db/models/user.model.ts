@@ -14,10 +14,13 @@ class User extends Model<InferAttributes<User>, InferCreationAttributes<User>> {
     declare email: string;
     declare password: string;
     declare phoneNo: string;
-    declare graduationYear: string;
+    declare graduationYear: CreationOptional<string | null>;
     declare createdAt: CreationOptional<Date>;
     declare updatedAt: CreationOptional<Date>;
     declare deletedAt: CreationOptional<Date | null>;
+    declare isActive: CreationOptional<boolean>;
+    declare activationTokenHash: CreationOptional<string | null>;
+    declare activationTokenExpiresAt: CreationOptional<Date | null>;
 
     declare profile?: NonAttribute<UserProfile>;
     declare roles?: NonAttribute<Role[]>;
@@ -54,6 +57,23 @@ User.init({
     password: {
         type: DataTypes.STRING(255),
         allowNull: false
+    },
+
+    isActive: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: true,
+    field: 'is_active',
+},
+    activationTokenHash: {
+        type: DataTypes.STRING(64),
+        allowNull: true,
+        field: 'activation_token_hash',
+    },
+    activationTokenExpiresAt: {
+        type: DataTypes.DATE,
+        allowNull: true,
+        field: 'activation_token_expires_at',
     },
 
     phoneNo: {

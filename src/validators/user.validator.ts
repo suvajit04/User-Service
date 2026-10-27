@@ -78,3 +78,10 @@ export const updateUserProfileSchema = z.object({
 });
 
 
+export const createUserInvitationSchema = z.object({
+    fullName: z.string().trim().min(4).max(50),
+    email: z.string().trim().email(),
+    phoneNo: z.string().trim().regex(/^[6-9]\d{9}$/),
+    role: z.string().trim().min(1),
+});
+

@@ -2,6 +2,7 @@ import './db/models/associations';
 
 import cors from 'cors';
 import express from 'express';
+import cookieParser from 'cookie-parser';
 
 import logger from './configs/logger.config';
 import { frontendConfig, serverConfig } from './configs/server.config';
@@ -12,13 +13,17 @@ import apiRouter from './routes';
 
 const app = express();
 app.use(cors({
-    origin: [frontendConfig.FRONTEND_URL], 
+    origin: [frontendConfig.FRONTEND_URL],
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
 app.use(express.json());
 
 app.use(attachCorrelationIdMiddleware);
+
+app.use(cookieParser());
 
 app.use('/api', apiRouter);
 

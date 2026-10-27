@@ -189,7 +189,30 @@ async function getAllCandidatesCSV(req: AuthRequest, res: Response, next: NextFu
     }
 }
 
+/**
+ * Creates a user invited by an admin.
+ */
+async function createUserHandler(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+) {
+    try {
+        const result = await userService.createAdminUserService(req.body);
+
+        res.status(StatusCodes.CREATED).json({
+            success: true,
+            message: 'User created successfully',
+            data: result.user,
+            error: {},
+        });
+    } catch (error) {
+        next(error);
+    }
+}
+
 export default {
+    createUserHandler,
     getAllUsers,
     getSelfDetails,
     updateUserHandler,

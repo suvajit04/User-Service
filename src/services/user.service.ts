@@ -1,10 +1,11 @@
 import { json2csv } from 'json-2-csv';
 import { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
+import { createHash, randomBytes } from 'crypto';
 
 import logger from '../configs/logger.config';
 import sequelize from '../db/models/sequelize';
 import User from '../db/models/user.model';
-import { FindUserByNameDto, LoginUserDto, RegisterUserDto } from '../dtos/user.dto';
+import { CreateUserInvitationDto,FindUserByNameDto, LoginUserDto, RegisterUserDto } from '../dtos/user.dto';
 import { UpdateUserDto } from '../dtos/userProfile.dto';
 import RoleRepository from '../repository/role.repository';
 import UserRepository from '../repository/user.repository';
@@ -179,10 +180,14 @@ class UserService {
             return decoded;
             
         } catch (error) {
+
             if (error instanceof TokenExpiredError) {
-                return new UnauthorizedError('Session expired. Please login again.');
+                throw new UnauthorizedError('Session expired. Please login again.');
             } else if (error instanceof JsonWebTokenError) {
-                logger.error('Invalid token');
+                logger.error('JWT verification failed', {
+                    message: error.message,
+                });
+
                 throw new UnauthorizedError('Invalid token');
             } else {
                 logger.error('Verification of token failed');
@@ -191,5 +196,106 @@ class UserService {
       
         }
     }
+
+    
+    /**
+     * Creates a user invited by an admin and assigns the requested role.
+     * Stores an inactive account with a hashed activation token.
+     */
+    async createAdminUserService(userData: CreateUserInvitationDto) {
+        const email = userData.email.trim().toLowerCase();
+        const roleName = userData.role.trim().toLowerCase();
+
+        // Check whether the email is already registered.
+        const existingUser = await this.userRepository.findByEmail(email);
+
+        if (existingUser) {
+            throw new BadRequestError('User already registered');
+        }
+
+        // Fetch the exact role selected by Admin.
+        const requestedRole =
+            await this.roleRepository.getRoleByExactName(roleName);
+
+        if (!requestedRole) {
+            throw new BadRequestError('Invalid role selected');
+        }
+
+        // Generate a secure, one-time activation token.
+        const activationToken = randomBytes(32).toString('hex');
+
+        // Store only the token hash in the database.
+        const activationTokenHash = createHash('sha256')
+            .update(activationToken)
+            .digest('hex');
+
+        // Set the activation link expiry to 24 hours.
+        const activationTokenExpiresAt = new Date(
+            Date.now() + 24 * 60 * 60 * 1000,
+        );
+
+        // Generate a random password that will never be shared.
+        // The User model's beforeSave hook hashes this password.
+        const temporaryPassword = randomBytes(48).toString('hex');
+
+        const transaction = await sequelize.transaction();
+
+        try {
+            // Create the user in an inactive state.
+            const newUser = await this.userRepository.create(
+                {
+                    fullName: userData.fullName.trim(),
+                    email,
+                    phoneNo: userData.phoneNo,
+                    password: temporaryPassword,
+                    isActive: false,
+                    activationTokenHash,
+                    activationTokenExpiresAt,
+                },
+                transaction,
+            );
+
+            // Create the associated profile.
+            await this.userProfileRepository.create(
+                {
+                    userId: newUser.id,
+                },
+                transaction,
+            );
+
+            // Assign the selected role to the new user.
+            await this.userRoleRepository.createUserRole({
+                userId: newUser.id,
+                roleId: requestedRole.id,
+                transaction,
+            });
+
+            await transaction.commit();
+
+            // Return safe user details and the token for internal
+            // activation-email delivery. Never expose the token in the API.
+            return {
+                user: {
+                    id: newUser.id,
+                    fullName: newUser.fullName,
+                    email: newUser.email,
+                    phoneNo: newUser.phoneNo,
+                    role: requestedRole.name,
+                    isActive: newUser.isActive,
+                    activationTokenExpiresAt,
+                },
+                activationToken,
+            };
+        } catch (error) {
+            await transaction.rollback();
+
+            logger.error('Error while creating admin-managed user', {
+                error,
+            });
+
+            throw new InternalServerError('Error while creating user');
+        }
+    }
+
 }
 export default UserService;

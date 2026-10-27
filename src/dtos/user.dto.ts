@@ -20,3 +20,10 @@ export type FindUserByNameDto = {
     page: number,
     limit: number
 }
+
+export type CreateUserInvitationDto = {
+    fullName: string;
+    email: string;
+    phoneNo: string;
+    role: string;
+};

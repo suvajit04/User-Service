@@ -21,6 +21,20 @@ class RoleRepository extends BaseRepository<Role> {
         return record;
     }
 
+    
+    // Fetch a role using its exact name.
+    async getRoleByExactName(roleName: string) {
+        const record = await this.model.findOne({
+            where: {
+                name: roleName,
+            },
+            attributes: ['name', 'id'],
+        });
+
+        return record;
+    }
+
+
 }
 
 export default RoleRepository;

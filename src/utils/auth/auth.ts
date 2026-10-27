@@ -1,6 +1,5 @@
 import bcrypt from 'bcrypt';
 import jwt, { Secret } from 'jsonwebtoken';
-
 import { serverConfig } from '../../configs/server.config';
 import { JwtTokenInput } from '../../types/JwtTokenInput';
 import { UserTokenPayload } from '../../types/UserTokenPayload';
@@ -32,7 +31,11 @@ export async function hashPassword (password: string): Promise<string> {
 
 export function createToken(payload: JwtTokenInput): string {
     try {
-        const token = jwt.sign(payload, JWT_SECRET as Secret, { expiresIn: '1d' });
+        const token = jwt.sign(payload, JWT_SECRET as Secret, {
+            expiresIn: '1d'
+        });
+        
+
         return token;
     } catch (error) {
         throw error;
