@@ -1,6 +1,8 @@
 import dotenv from 'dotenv';
 
 type ServerConfig = {
+    REDIS_PORT: any | number | undefined;
+    REDIS_HOST: any | string | undefined;
     PORT: number
     SALT :number
     JWT_SECRET : string
@@ -31,7 +33,9 @@ export const serverConfig: ServerConfig =  {
     PORT: Number(process.env.PORT) || 3000,
     SALT : Number(process.env.SALT),
     JWT_SECRET : String(process.env.JWT_SECRET),
-    JWT_EXPRIRES_IN : String(process.env.JWT_EXPRIRES_IN)
+    JWT_EXPRIRES_IN : String(process.env.JWT_EXPRIRES_IN),
+    REDIS_HOST: process.env.REDIS_Host || 'localhost',
+    REDIS_PORT: Number(process.env.REDIS_PORT) || 6379
 };
 
 export const dbConfig: DBConfig = {

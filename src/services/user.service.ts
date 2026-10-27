@@ -1,6 +1,6 @@
 import { json2csv } from 'json-2-csv';
 import { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
-import { createHash, randomBytes } from 'crypto';
+import { randomBytes } from 'crypto';
 
 import logger from '../configs/logger.config';
 import sequelize from '../db/models/sequelize';
@@ -14,6 +14,9 @@ import UserRoleRepository from '../repository/userRole.repository';
 import { checkPassword, createToken, verifyToken } from '../utils/auth/auth';
 import { BadRequestError, InternalServerError, NotFoundError, UnauthorizedError } from '../utils/errors/app.error';
 import { formatter } from '../utils/helpers/date.helper';
+import userCredentialsNotificationQueue, {
+    USER_CREDENTIALS_NOTIFICATION_PAYLOAD,
+} from '../queues/userCredentialsNotification.queue';
 
 
 class UserService {
@@ -80,6 +83,12 @@ class UserService {
             throw new NotFoundError('User not found');
         }
         
+        if (checkUser.isActive === false) {
+            throw new UnauthorizedError(
+                'Your account is inactive. Please contact your administrator.',
+            );
+        }
+
         const verified = await checkPassword(userData.password , checkUser.password);
 
         if(!verified) {
@@ -199,81 +208,109 @@ class UserService {
 
     
     /**
-     * Creates a user invited by an admin and assigns the requested role.
-     * Stores an inactive account with a hashed activation token.
+     * Creates an admin-managed user, assigns the requested role, and enqueues
+     * an email containing the user's temporary login credentials.
+     *
+     * The password is hashed by the User model's beforeSave hook. The plain
+     * temporary password is only passed to the notification queue and is never
+     * returned from this method or written to logs.
      */
     async createAdminUserService(userData: CreateUserInvitationDto) {
         const email = userData.email.trim().toLowerCase();
         const roleName = userData.role.trim().toLowerCase();
 
-        // Check whether the email is already registered.
         const existingUser = await this.userRepository.findByEmail(email);
-
         if (existingUser) {
             throw new BadRequestError('User already registered');
         }
 
-        // Fetch the exact role selected by Admin.
         const requestedRole =
             await this.roleRepository.getRoleByExactName(roleName);
-
         if (!requestedRole) {
             throw new BadRequestError('Invalid role selected');
         }
 
-        // Generate a secure, one-time activation token.
-        const activationToken = randomBytes(32).toString('hex');
-
-        // Store only the token hash in the database.
-        const activationTokenHash = createHash('sha256')
-            .update(activationToken)
-            .digest('hex');
-
-        // Set the activation link expiry to 24 hours.
-        const activationTokenExpiresAt = new Date(
-            Date.now() + 24 * 60 * 60 * 1000,
-        );
-
-        // Generate a random password that will never be shared.
-        // The User model's beforeSave hook hashes this password.
-        const temporaryPassword = randomBytes(48).toString('hex');
-
+        // Generate a temporary password for the credentials email.
+        const temporaryPassword = randomBytes(18).toString('base64url');
         const transaction = await sequelize.transaction();
+        let transactionCommitted = false;
 
         try {
-            // Create the user in an inactive state.
             const newUser = await this.userRepository.create(
                 {
                     fullName: userData.fullName.trim(),
                     email,
                     phoneNo: userData.phoneNo,
                     password: temporaryPassword,
-                    isActive: false,
-                    activationTokenHash,
-                    activationTokenExpiresAt,
+                    isActive: true,
+                    activationTokenHash: null,
+                    activationTokenExpiresAt: null,
                 },
                 transaction,
             );
 
-            // Create the associated profile.
             await this.userProfileRepository.create(
-                {
-                    userId: newUser.id,
-                },
+                { userId: newUser.id },
                 transaction,
             );
 
-            // Assign the selected role to the new user.
             await this.userRoleRepository.createUserRole({
                 userId: newUser.id,
                 roleId: requestedRole.id,
                 transaction,
             });
 
+            // Save the user first. Queue failures must not roll back a committed user.
             await transaction.commit();
+            transactionCommitted = true;
 
-            // Return safe user details and the token for internal
-            // activation-email delivery. Never expose the token in the API.
+            const configuredLoginUrl = process.env.USER_LOGIN_URL?.trim();
+            const frontendUrl = process.env.FRONTEND_URL?.trim();
+            const loginUrl = configuredLoginUrl || (
+                frontendUrl
+                    ? `${frontendUrl.replace(/\/+$/, '')}/sign-in`
+                    : undefined
+            );
+
+            let notificationQueued = false;
+
+            if (!loginUrl) {
+                logger.error('User created, but login URL is not configured', {
+                    userId: newUser.id,
+                    email: newUser.email,
+                });
+            } else {
+                try {
+                    await userCredentialsNotificationQueue.add(
+                        USER_CREDENTIALS_NOTIFICATION_PAYLOAD,
+                        {
+                            userId: Number(newUser.id),
+                            fullName: newUser.fullName,
+                            email: newUser.email,
+                            temporaryPassword,
+                            loginUrl,
+                        },
+                        {
+                            jobId: `user-credentials-${newUser.id}`,
+                        },
+                    );
+
+                    notificationQueued = true;
+                    logger.info('User credentials email job enqueued', {
+                        userId: newUser.id,
+                        email: newUser.email,
+                    });
+                } catch (queueError) {
+                    logger.error('Failed to enqueue user credentials email', {
+                        userId: newUser.id,
+                        email: newUser.email,
+                        error: queueError instanceof Error
+                            ? queueError.message
+                            : String(queueError),
+                    });
+                }
+            }
+
             return {
                 user: {
                     id: newUser.id,
@@ -282,15 +319,24 @@ class UserService {
                     phoneNo: newUser.phoneNo,
                     role: requestedRole.name,
                     isActive: newUser.isActive,
-                    activationTokenExpiresAt,
                 },
-                activationToken,
+                notificationQueued,
             };
         } catch (error) {
-            await transaction.rollback();
+            if (!transactionCommitted) {
+                try {
+                    await transaction.rollback();
+                } catch (rollbackError) {
+                    logger.error('Transaction rollback failed while creating user', {
+                        error: rollbackError instanceof Error
+                            ? rollbackError.message
+                            : String(rollbackError),
+                    });
+                }
+            }
 
             logger.error('Error while creating admin-managed user', {
-                error,
+                error: error instanceof Error ? error.message : String(error),
             });
 
             throw new InternalServerError('Error while creating user');
